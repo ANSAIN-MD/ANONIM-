@@ -1,0 +1,509 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AnonChat - Obrolan Anonim</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Font Inter dari Google Fonts */
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+        html { font-family: 'Inter', sans-serif; }
+
+        /* Scrollbar kustom untuk Chrome, Safari, Opera */
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 8px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: #e0e0e0;
+            border-radius: 10px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: #a0a0a0;
+            border-radius: 10px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+            background: #707070;
+        }
+
+        /* Scrollbar kustom untuk Firefox */
+        .custom-scrollbar {
+            scrollbar-width: thin;
+            scrollbar-color: #a0a0a0 #e0e0e0;
+        }
+
+        /* Efek klik tombol */
+        .btn-active:active {
+            transform: scale(0.98);
+            box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+
+        /* Animasi loading placeholder */
+        @keyframes pulse {
+          0%, 100% { opacity: 1; }
+          50% { opacity: .5; }
+        }
+        .animate-pulse-custom {
+            animation: pulse 1.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+
+        /* Animasi masuk modal */
+        @keyframes fadeInScale {
+            from { opacity: 0; transform: scale(0.95); }
+            to { opacity: 1; transform: scale(1); }
+        }
+        .modal-enter {
+            animation: fadeInScale 0.3s ease-out forwards;
+        }
+    </style>
+</head>
+<body class="flex flex-col h-screen bg-gradient-to-br from-indigo-700 to-purple-900 font-inter antialiased overflow-hidden text-gray-900">
+
+    <!-- Modal Pengaturan Profil -->
+    <div id="profileSetupModal" class="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center p-4 z-50 hidden modal-enter">
+        <div class="bg-white rounded-3xl shadow-2xl p-8 w-full max-w-sm mx-auto relative border-4 border-indigo-400">
+            <h2 class="text-3xl font-extrabold mb-6 text-indigo-700 text-center">Selamat Datang!</h2>
+            <p class="text-gray-700 text-center mb-6">Masukkan nama tampilan Anda untuk memulai chat.</p>
+            <input
+                type="text"
+                id="userNameInput"
+                placeholder="Nama Anda"
+                class="w-full p-3.5 border border-gray-300 rounded-full text-base focus:outline-none focus:ring-4 focus:ring-indigo-300 focus:border-transparent transition duration-200 mb-6"
+                maxlength="20"
+            />
+            <button
+                id="saveProfileButton"
+                class="w-full bg-gradient-to-r from-indigo-600 to-blue-700 hover:from-indigo-700 hover:to-blue-800 text-white font-bold py-3.5 px-6 rounded-full shadow-lg transition duration-300 ease-in-out transform hover:-translate-y-0.5 hover:scale-105 active:scale-95 btn-active"
+            >
+                Mulai Chat
+            </button>
+        </div>
+    </div>
+
+    <!-- Kontainer Aplikasi Chat Utama -->
+    <div id="chatAppContainer" class="flex flex-col flex-1 hidden">
+        <header class="bg-white bg-opacity-95 backdrop-blur-md text-gray-800 p-5 shadow-2xl rounded-b-3xl mx-auto w-11/12 max-w-2xl mt-6 transform transition-all duration-300 hover:scale-[1.01]">
+            <h1 class="text-4xl sm:text-5xl font-extrabold text-center text-purple-800 tracking-tight leading-tight">AnonChat</h1>
+            <p class="text-center text-sm sm:text-base mt-3 font-medium text-gray-600">
+                <span id="headerUserName" class="font-bold text-indigo-700"></span> Anda (<span id="userIdDisplay" class="font-bold text-indigo-700 text-xs">Memuat...</span>)
+                <span id="partnerStatus" class="block text-purple-600 mt-1 font-semibold"></span>
+            </p>
+        </header>
+
+        <main class="flex-1 flex flex-col p-4 md:p-6 overflow-hidden w-11/12 max-w-2xl mx-auto mt-6">
+            <div class="bg-white bg-opacity-98 rounded-3xl shadow-xl p-5 flex-1 flex flex-col mb-6 overflow-hidden border-4 border-purple-300">
+                <p id="statusMessage" class="text-center text-sm sm:text-base font-semibold px-3 py-2 bg-purple-100 text-purple-700 rounded-lg mb-5 shadow-inner">Memuat aplikasi...</p>
+
+                <div id="messagesContainer" class="flex-1 overflow-y-auto pr-2 custom-scrollbar space-y-4 pb-3">
+                    <!-- Pesan akan dimuat di sini oleh JavaScript -->
+                    <div id="noMessagesPlaceholder" class="text-center text-gray-500 mt-16 text-lg sm:text-xl font-medium hidden p-4">
+                        Belum ada pesan. Mari mulai percakapan Anda! 👋
+                        <br><span class="text-sm mt-2 block">Kirim pesan pertama Anda.</span>
+                    </div>
+                </div>
+            </div>
+
+            <form id="messageForm" class="flex items-center space-x-3 bg-white bg-opacity-98 p-4 rounded-full shadow-2xl border-2 border-purple-200">
+                <input
+                    type="text"
+                    id="messageInput"
+                    placeholder="Tulis pesan Anda di sini..."
+                    class="flex-1 p-3.5 border border-gray-300 rounded-full text-base focus:outline-none focus:ring-4 focus:ring-purple-300 focus:border-transparent transition duration-200 ease-in-out disabled:bg-gray-100 disabled:placeholder-gray-400"
+                    disabled
+                />
+                <button
+                    type="submit"
+                    id="sendButton"
+                    class="bg-gradient-to-r from-purple-700 to-indigo-800 hover:from-purple-800 hover:to-indigo-900 text-white font-bold py-3.5 px-7 rounded-full shadow-lg transition duration-300 ease-in-out transform hover:-translate-y-0.5 hover:scale-105 active:scale-95 btn-active disabled:opacity-50 disabled:cursor-not-allowed disabled:from-gray-400 disabled:to-gray-500"
+                    disabled
+                >
+                    Kirim
+                </button>
+            </form>
+
+            <div class="mt-6 flex justify-center">
+                <button
+                    id="newChatButton"
+                    class="bg-gradient-to-r from-green-600 to-teal-700 hover:from-green-700 hover:to-teal-800 text-white font-bold py-3 px-8 rounded-full shadow-lg transition duration-300 ease-in-out transform hover:-translate-y-0.5 hover:scale-105 active:scale-95 btn-active"
+                >
+                    Mulai Chat Baru
+                </button>
+            </div>
+        </main>
+    </div>
+
+    <!-- Firebase SDK CDN -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, getDoc, addDoc, setDoc, updateDoc, onSnapshot, collection, query, where, limit, orderBy, serverTimestamp, getDocs } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Konfigurasi Firebase Anda
+        const firebaseConfig = {
+            apiKey: "AIzaSyDMmDwzuTRZnJfZ77AV-EKTkjsmUxMwk8s",
+            authDomain: "panel-admin-4c9fa.firebaseapp.com",
+            projectId: "panel-admin-4c9fa",
+            storageBucket: "panel-admin-4c9fa.firebasestorage.app",
+            messagingSenderId: "800931227233",
+            appId: "1:800931227233:web:988c0329f8e6a26e022c20",
+            measurementId: "G-0KJRTH4679"
+        };
+
+        // Inisialisasi Firebase
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+        const auth = getAuth(app);
+
+        // Variabel global
+        let currentUserId = null;
+        let currentUserName = null; // Nama tampilan pengguna
+        let currentSessionId = null;
+        let currentPartnerId = null;
+        let currentPartnerName = null; // Nama tampilan mitra
+        let unsubscribeMessages = null;
+
+        // Referensi elemen DOM
+        const profileSetupModal = document.getElementById('profileSetupModal');
+        const userNameInput = document.getElementById('userNameInput');
+        const saveProfileButton = document.getElementById('saveProfileButton');
+        const chatAppContainer = document.getElementById('chatAppContainer');
+        const headerUserName = document.getElementById('headerUserName');
+        const userIdDisplay = document.getElementById('userIdDisplay');
+        const partnerStatusDisplay = document.getElementById('partnerStatus');
+        const statusMessageDisplay = document.getElementById('statusMessage');
+        const messagesContainer = document.getElementById('messagesContainer');
+        const messageInput = document.getElementById('messageInput');
+        const sendButton = document.getElementById('sendButton');
+        const messageForm = document.getElementById('messageForm');
+        const newChatButton = document.getElementById('newChatButton');
+        const noMessagesPlaceholder = document.getElementById('noMessagesPlaceholder');
+
+        // Fungsi utilitas untuk memperbarui status UI
+        function updateUIStatus(message, isEnabled = false) {
+            statusMessageDisplay.textContent = message;
+            messageInput.disabled = !isEnabled;
+            sendButton.disabled = !isEnabled || messageInput.value.trim() === '';
+            // Tampilkan atau sembunyikan placeholder "Belum ada pesan"
+            if (messagesContainer.children.length === 0 && !noMessagesPlaceholder.classList.contains('hidden')) {
+                 // Check if it's just the placeholder, not actual messages
+                const actualMessages = Array.from(messagesContainer.children).filter(child => child.id !== 'noMessagesPlaceholder');
+                if (actualMessages.length === 0) {
+                    noMessagesPlaceholder.classList.remove('hidden');
+                }
+            } else {
+                noMessagesPlaceholder.classList.add('hidden');
+            }
+            // Efek pulsasi untuk status "Menunggu"
+            if (message.includes("Menunggu")) {
+                statusMessageDisplay.classList.add('animate-pulse-custom');
+            } else {
+                statusMessageDisplay.classList.remove('animate-pulse-custom');
+            }
+
+            // Perbarui status mitra di header
+            if (currentPartnerName) {
+                partnerStatusDisplay.textContent = `Terhubung dengan ${currentPartnerName}`;
+                partnerStatusDisplay.classList.remove('text-purple-600', 'animate-pulse-custom');
+                partnerStatusDisplay.classList.add('text-green-600');
+            } else if (currentSessionId && message.includes("Menunggu")) {
+                partnerStatusDisplay.textContent = "Menunggu mitra...";
+                partnerStatusDisplay.classList.add('animate-pulse-custom', 'text-purple-600');
+            } else {
+                partnerStatusDisplay.textContent = "";
+            }
+        }
+
+        // Fungsi untuk menampilkan pesan chat
+        function displayMessage(msg) {
+            const messageElement = document.createElement('div');
+            // Gunakan conditional class untuk posisi dan warna bubble
+            const isSender = msg.senderId === currentUserId;
+            messageElement.className = `flex ${isSender ? 'justify-end' : 'justify-start'}`;
+
+            const bubble = document.createElement('div');
+            bubble.className = `max-w-[85%] sm:max-w-[70%] p-3 rounded-2xl shadow-lg transition duration-200 ease-in-out transform hover:scale-[1.01] ${
+                isSender
+                    ? 'bg-indigo-600 text-white rounded-br-[8px] ml-auto'
+                    : 'bg-gray-100 text-gray-800 rounded-bl-[8px] mr-auto border border-gray-200'
+            }`;
+
+            const senderNameEl = document.createElement('p');
+            senderNameEl.className = `text-xs font-semibold mb-1 ${isSender ? 'text-indigo-200' : 'text-gray-500'}`;
+            senderNameEl.textContent = isSender ? "Anda" : (msg.senderName || "Mitra Anonim"); // Tampilkan nama pengirim
+
+            const text = document.createElement('p');
+            text.className = "text-base leading-snug break-words"; // Tambahkan break-words
+            text.textContent = msg.text;
+
+            const timestamp = document.createElement('span');
+            timestamp.className = `text-xs opacity-85 mt-1 block ${isSender ? 'text-indigo-200' : 'text-gray-500'} text-right`;
+            if (msg.timestamp && msg.timestamp.toDate) {
+                timestamp.textContent = msg.timestamp.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            } else {
+                timestamp.textContent = 'Mengirim...';
+            }
+
+            // Tambahkan nama pengirim hanya jika bukan pesan dari diri sendiri atau pesan pertama
+            if (!isSender || messagesContainer.children.length === 0) { // Menampilkan nama pengirim jika bukan saya, atau jika saya mengirim pesan pertama
+                 bubble.appendChild(senderNameEl);
+            } else if (messagesContainer.lastElementChild) { // Cek apakah pesan sebelumnya dari pengirim yang sama, agar tidak menampilkan nama berulang
+                const lastMsgEl = messagesContainer.lastElementChild.querySelector('.text-base'); // Ambil elemen teks dari pesan terakhir
+                if (lastMsgEl && lastMsgEl.textContent === msg.text && messagesContainer.lastElementChild.querySelector('.font-semibold').textContent === senderNameEl.textContent) {
+                    // Jika pesan sama dan pengirim sama, jangan tambahkan nama lagi
+                } else {
+                    bubble.appendChild(senderNameEl);
+                }
+            }
+
+
+            bubble.appendChild(text);
+            bubble.appendChild(timestamp);
+            messageElement.appendChild(bubble);
+            messagesContainer.appendChild(messageElement);
+            messagesContainer.scrollTop = messagesContainer.scrollHeight; // Gulir ke bawah
+            noMessagesPlaceholder.classList.add('hidden'); // Sembunyikan placeholder jika ada pesan
+        }
+
+
+        // Fungsi utama untuk menemukan atau membuat sesi chat
+        async function findOrCreateSession() {
+            updateUIStatus("Mencari mitra chat...");
+            const appId = firebaseConfig.appId;
+
+            try {
+                const sessionsCollectionPath = `artifacts/${appId}/public/data/sessions`;
+                const sessionsRef = collection(db, sessionsCollectionPath);
+
+                // 1. Coba temukan sesi yang menunggu
+                const q = query(sessionsRef,
+                    where("status", "==", "waiting"),
+                    where("user1Id", "!=", currentUserId),
+                    limit(1)
+                );
+                const querySnapshot = await getDocs(q);
+
+                if (!querySnapshot.empty) {
+                    const sessionDoc = querySnapshot.docs[0];
+                    const sessionId = sessionDoc.id;
+                    const sessionData = sessionDoc.data();
+
+                    if (!sessionData.user2Id) {
+                        await updateDoc(sessionDoc.ref, {
+                            user2Id: currentUserId,
+                            user2Name: currentUserName, // Simpan nama pengguna 2
+                            status: "active",
+                            lastMessageAt: serverTimestamp()
+                        });
+                        currentSessionId = sessionId;
+                        currentPartnerId = sessionData.user1Id;
+                        currentPartnerName = sessionData.user1Name || "Mitra Anonim"; // Dapatkan nama partner 1
+                        updateUIStatus(`Berhasil bergabung ke sesi! Mitra Anda: ${currentPartnerName}. Anda bisa mulai chat.`, true);
+                        startMessageListener(currentSessionId);
+                    } else {
+                        await createNewSession();
+                    }
+                } else {
+                    // 2. Tidak ada sesi menunggu, buat sesi baru
+                    await createNewSession();
+                }
+            } catch (error) {
+                console.error("KESALAHAN SAAT MENEMUKAN ATAU MEMBUAT SESI FIRESTORE:", error);
+                updateUIStatus("Kesalahan saat mencari sesi. Silakan coba lagi. (Lihat konsol untuk detail)");
+            }
+        }
+
+        async function createNewSession() {
+            const appId = firebaseConfig.appId;
+            try {
+                const sessionsCollectionPath = `artifacts/${appId}/public/data/sessions`;
+                const sessionsRef = collection(db, sessionsCollectionPath);
+
+                const newSessionDocRef = await addDoc(sessionsRef, {
+                    user1Id: currentUserId,
+                    user1Name: currentUserName, // Simpan nama pengguna 1
+                    user2Id: null,
+                    user2Name: null,
+                    status: "waiting",
+                    createdAt: serverTimestamp(),
+                    lastMessageAt: serverTimestamp()
+                });
+                currentSessionId = newSessionDocRef.id;
+                currentPartnerId = null;
+                currentPartnerName = null;
+                updateUIStatus("Sesi chat baru dibuat. Menunggu mitra bergabung...");
+
+                const sessionDocRef = doc(db, sessionsCollectionPath, currentSessionId);
+                onSnapshot(sessionDocRef, (docSnap) => {
+                    if (docSnap.exists()) {
+                        const data = docSnap.data();
+                        if (data.user2Id && data.status === 'active') {
+                            currentPartnerId = data.user2Id;
+                            currentPartnerName = data.user2Name || "Mitra Anonim"; // Dapatkan nama partner 2
+                            updateUIStatus(`Mitra telah bergabung! Mitra Anda: ${currentPartnerName}. Anda bisa mulai chat.`, true);
+                            startMessageListener(currentSessionId);
+                        } else if (data.status === 'ended') {
+                            updateUIStatus("Sesi chat berakhir. Silakan mulai chat baru.");
+                            resetChatState();
+                        }
+                    }
+                }, (error) => {
+                    console.error("Kesalahan mendengarkan perubahan sesi:", error);
+                });
+            } catch (error) {
+                console.error("KESALAHAN SAAT MEMBUAT SESI FIRESTORE BARU:", error);
+                updateUIStatus("Kesalahan saat membuat sesi. Silakan coba lagi. (Lihat konsol untuk detail)");
+            }
+        }
+
+        function startMessageListener(sessionId) {
+            if (unsubscribeMessages) {
+                unsubscribeMessages();
+            }
+
+            const appId = firebaseConfig.appId;
+            const messagesRef = collection(db, `artifacts/${appId}/public/data/sessions/${sessionId}/messages`);
+            const q = query(messagesRef, orderBy("timestamp"));
+
+            unsubscribeMessages = onSnapshot(q, (snapshot) => {
+                messagesContainer.innerHTML = ''; // Bersihkan kontainer
+                if (snapshot.empty) {
+                    noMessagesPlaceholder.classList.remove('hidden');
+                } else {
+                    noMessagesPlaceholder.classList.add('hidden');
+                }
+                snapshot.forEach(doc => {
+                    const msgData = { id: doc.id, ...doc.data() };
+                    displayMessage(msgData);
+                });
+                updateUIStatus(statusMessageDisplay.textContent, true);
+            }, (error) => {
+                console.error("KESALAHAN SAAT MENDENGARKAN PESAN:", error);
+                updateUIStatus("Kesalahan saat memuat pesan. (Lihat konsol)");
+            });
+        }
+
+        // Fungsi untuk reset state chat
+        function resetChatState() {
+            currentSessionId = null;
+            currentPartnerId = null;
+            currentPartnerName = null;
+            messagesContainer.innerHTML = '';
+            messageInput.value = '';
+            updateUIStatus("Tekan 'Mulai Chat Baru' untuk menemukan mitra.", false);
+            noMessagesPlaceholder.classList.remove('hidden');
+            if (unsubscribeMessages) {
+                unsubscribeMessages();
+                unsubscribeMessages = null;
+            }
+        }
+
+        // Event listener untuk pengiriman pesan
+        messageForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const messageText = messageInput.value.trim();
+            if (messageText === '' || !db || !currentSessionId || !currentUserId || !currentPartnerId) {
+                return;
+            }
+
+            const appId = firebaseConfig.appId;
+            try {
+                const messagesCollectionRef = collection(db, `artifacts/${appId}/public/data/sessions/${currentSessionId}/messages`);
+                await addDoc(messagesCollectionRef, {
+                    senderId: currentUserId,
+                    senderName: currentUserName, // Kirim nama tampilan pengguna
+                    text: messageText,
+                    timestamp: serverTimestamp(),
+                });
+                messageInput.value = '';
+                const sessionDocRef = doc(db, `artifacts/${appId}/public/data/sessions/${currentSessionId}`);
+                await updateDoc(sessionDocRef, {
+                    lastMessageAt: serverTimestamp()
+                });
+            } catch (error) {
+                console.error("KESALAHAN SAAT MENGIRIM PESAN:", error);
+                updateUIStatus("Kesalahan saat mengirim pesan. (Lihat konsol)");
+            }
+        });
+
+        // Event listener untuk tombol 'Mulai Chat Baru'
+        newChatButton.addEventListener('click', async () => {
+            const appId = firebaseConfig.appId;
+            if (currentSessionId && currentUserId) {
+                const sessionRef = doc(db, `artifacts/${appId}/public/data/sessions/${currentSessionId}`);
+                try {
+                    const docSnap = await getDoc(sessionRef);
+                    if (docSnap.exists()) {
+                        const data = docSnap.data();
+                        if (data.status === 'active' && (data.user1Id === currentUserId || data.user2Id === currentUserId)) {
+                            await updateDoc(sessionRef, { status: 'ended' }).catch(e => console.error("Gagal mengakhiri sesi sebelumnya:", e));
+                        }
+                    }
+                } catch (error) {
+                    console.error("Gagal mengambil dokumen sesi saat memulai chat baru:", error);
+                }
+            }
+            resetChatState();
+            findOrCreateSession();
+        });
+
+        // ===========================================
+        // Logika Pengaturan Profil Pengguna
+        // ===========================================
+        saveProfileButton.addEventListener('click', () => {
+            const userName = userNameInput.value.trim();
+            if (userName.length < 2 || userName.length > 20) {
+                alert('Nama harus antara 2 hingga 20 karakter.'); // Menggunakan alert karena ini di modal awal
+                return;
+            }
+            localStorage.setItem('anonChatUserName', userName);
+            currentUserName = userName;
+            headerUserName.textContent = userName;
+            profileSetupModal.classList.add('hidden');
+            chatAppContainer.classList.remove('hidden');
+            // Lanjutkan dengan autentikasi Firebase
+            onAuthStateChanged(auth, async (user) => {
+                if (user) {
+                    currentUserId = user.uid;
+                    userIdDisplay.textContent = currentUserId.substring(0, 8) + '...'; // Tampilkan ID singkat
+                    findOrCreateSession();
+                } else {
+                    try {
+                        await signInAnonymously(auth);
+                    } catch (error) {
+                        console.error("Kesalahan saat masuk anonim:", error);
+                        updateUIStatus("Gagal masuk. Silakan coba lagi.", false);
+                    }
+                }
+            });
+        });
+
+        // Inisialisasi awal saat DOM siap
+        document.addEventListener('DOMContentLoaded', () => {
+            currentUserName = localStorage.getItem('anonChatUserName');
+            if (currentUserName) {
+                headerUserName.textContent = currentUserName;
+                chatAppContainer.classList.remove('hidden');
+                // Lanjutkan dengan autentikasi Firebase
+                onAuthStateChanged(auth, async (user) => {
+                    if (user) {
+                        currentUserId = user.uid;
+                        userIdDisplay.textContent = currentUserId.substring(0, 8) + '...'; // Tampilkan ID singkat
+                        findOrCreateSession();
+                    } else {
+                        try {
+                            await signInAnonymously(auth);
+                        } catch (error) {
+                            console.error("Kesalahan saat masuk anonim:", error);
+                            updateUIStatus("Gagal masuk. Silakan coba lagi.", false);
+                        }
+                    }
+                });
+            } else {
+                profileSetupModal.classList.remove('hidden');
+                userNameInput.focus();
+            }
+        });
+    </script>
+</body>
+</html>
