@@ -1,0 +1,460 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
+import { getFirestore, doc, getDoc, addDoc, setDoc, updateDoc, onSnapshot, collection, query, where, limit, orderBy, serverTimestamp } from 'firebase/firestore';
+
+// Pastikan variabel global __app_id, __firebase_config, dan __initial_auth_token tersedia
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+function App() {
+  const [db, setDb] = useState(null);
+  const [auth, setAuth] = useState(null);
+  const [userId, setUserId] = useState(null);
+  const [currentSessionId, setCurrentSessionId] = useState(null);
+  const [partnerId, setPartnerId] = useState(null);
+  const [messages, setMessages] = useState([]);
+  const [newMessage, setNewMessage] = useState('');
+  const [isAuthReady, setIsAuthReady] = useState(false);
+  const [statusMessage, setStatusMessage] = useState('Memuat aplikasi...');
+  const messagesEndRef = useRef(null);
+
+  // State baru untuk fitur ringkasan Gemini API
+  const [isSummarizing, setIsSummarizing] = useState(false);
+  const [summary, setSummary] = useState('');
+  const [showSummaryModal, setShowSummaryModal] = useState(false);
+
+  // Inisialisasi Firebase dan Autentikasi
+  useEffect(() => {
+    try {
+      const app = initializeApp(firebaseConfig);
+      const firestore = getFirestore(app);
+      const firebaseAuth = getAuth(app);
+      setDb(firestore);
+      setAuth(firebaseAuth);
+
+      const unsubscribe = onAuthStateChanged(firebaseAuth, async (user) => {
+        if (user) {
+          setUserId(user.uid);
+          setIsAuthReady(true);
+          setStatusMessage(`Terhubung sebagai: ${user.uid}. Mencari mitra...`);
+        } else {
+          if (initialAuthToken) {
+            try {
+              await signInWithCustomToken(firebaseAuth, initialAuthToken);
+            } catch (error) {
+              console.error("Kesalahan saat masuk dengan token kustom:", error);
+              setStatusMessage("Token kustom tidak valid, mencoba masuk secara anonim...");
+              await signInAnonymously(firebaseAuth);
+            }
+          } else {
+            await signInAnonymously(firebaseAuth);
+          }
+        }
+      });
+      return () => unsubscribe();
+    } catch (error) {
+      console.error("Kesalahan saat inisialisasi Firebase:", error);
+      setStatusMessage("Kesalahan saat memuat aplikasi. Silakan coba lagi.");
+    }
+  }, []);
+
+  // Logika untuk menemukan atau membuat sesi chat
+  useEffect(() => {
+    if (!isAuthReady || !db || !userId) return;
+
+    console.log("App ID yang digunakan untuk Firestore:", appId);
+
+    const findOrCreateSession = async () => {
+      setStatusMessage("Mencari mitra chat...");
+      try {
+        const sessionsCollectionPath = `artifacts/${appId}/public/data/sessions`;
+        const sessionsRef = collection(db, sessionsCollectionPath);
+        console.log("Mencoba mengakses koleksi sesi di:", sessionsCollectionPath);
+
+        const q = query(sessionsRef,
+          where("status", "==", "waiting"),
+          where("user1Id", "!=", userId),
+          limit(1)
+        );
+        console.log("Menjalankan query untuk sesi menunggu...");
+        const querySnapshot = await getDocs(q);
+        console.log("Query snapshot diterima. Apakah kosong?", querySnapshot.empty);
+
+        if (!querySnapshot.empty) {
+          const sessionDoc = querySnapshot.docs[0];
+          const sessionId = sessionDoc.id;
+          const sessionData = sessionDoc.data();
+          console.log("Sesi menunggu ditemukan:", sessionId, sessionData);
+
+          if (sessionData.user1Id === userId) {
+            setStatusMessage("Menunggu mitra bergabung ke sesi Anda...");
+            setCurrentSessionId(sessionId);
+            const sessionDocRef = doc(db, sessionsCollectionPath, sessionId);
+            onSnapshot(sessionDocRef, (docSnap) => {
+              if (docSnap.exists() && docSnap.data().user2Id && docSnap.data().status === 'active') {
+                setPartnerId(docSnap.data().user2Id);
+                setStatusMessage("Mitra telah bergabung! Anda bisa mulai chat.");
+                console.log("Mitra bergabung ke sesi saya:", docSnap.data().user2Id);
+              }
+            });
+          } else if (!sessionData.user2Id) {
+            console.log("Bergabung ke sesi yang ditemukan...");
+            await updateDoc(sessionDoc.ref, {
+              user2Id: userId,
+              status: "active",
+              lastMessageAt: serverTimestamp()
+            });
+            setCurrentSessionId(sessionId);
+            setPartnerId(sessionData.user1Id);
+            setStatusMessage("Berhasil bergabung ke sesi! Anda bisa mulai chat.");
+          } else {
+            console.warn("Sesi yang ditemukan sudah diisi. Mencoba membuat sesi baru.");
+            await createNewSession();
+          }
+        } else {
+          console.log("Tidak ada sesi menunggu, membuat sesi baru...");
+          await createNewSession();
+        }
+      } catch (error) {
+        console.error("KESALAHAN SAAT MENEMUKAN ATAU MEMBUAT SESI FIRESTORE:", error);
+        setStatusMessage("Kesalahan saat mencari sesi. Silakan coba lagi. (Lihat konsol untuk detail)");
+      }
+    };
+
+    const createNewSession = async () => {
+      try {
+        const sessionsCollectionPath = `artifacts/${appId}/public/data/sessions`;
+        const sessionsRef = collection(db, sessionsCollectionPath);
+        console.log("Mencoba membuat sesi baru di:", sessionsCollectionPath);
+
+        const newSessionDocRef = await addDoc(sessionsRef, {
+          user1Id: userId,
+          user2Id: null,
+          status: "waiting",
+          createdAt: serverTimestamp(),
+          lastMessageAt: serverTimestamp()
+        });
+        const sessionId = newSessionDocRef.id;
+        setCurrentSessionId(sessionId);
+        setPartnerId(null);
+        setStatusMessage("Sesi chat baru dibuat. Menunggu mitra bergabung...");
+        console.log("Sesi baru berhasil dibuat dengan ID:", sessionId);
+
+        const sessionDocRef = doc(db, sessionsCollectionPath, sessionId);
+        onSnapshot(sessionDocRef, (docSnap) => {
+          if (docSnap.exists() && docSnap.data().user2Id && docSnap.data().status === 'active') {
+            setPartnerId(docSnap.data().user2Id);
+            setStatusMessage("Mitra telah bergabung! Anda bisa mulai chat.");
+            console.log("Mitra bergabung ke sesi baru:", docSnap.data().user2Id);
+          }
+        });
+      } catch (error) {
+        console.error("KESALAHAN SAAT MEMBUAT SESI FIRESTORE BARU:", error);
+        setStatusMessage("Kesalahan saat membuat sesi. Silakan coba lagi. (Lihat konsol untuk detail)");
+      }
+    };
+
+    findOrCreateSession();
+
+    return () => {
+      if (currentSessionId && userId && db) {
+        const sessionRef = doc(db, `artifacts/${appId}/public/data/sessions/${currentSessionId}`);
+        getDoc(sessionRef).then(docSnap => {
+          if (docSnap.exists()) {
+            const data = docSnap.data();
+            if (data.status === 'active' && (data.user1Id === userId || data.user2Id === userId)) {
+              updateDoc(sessionRef, { status: 'ended' }).catch(e => console.error("Gagal mengakhiri sesi saat cleanup:", e));
+            }
+          }
+        }).catch(e => console.error("Gagal mengambil dokumen sesi saat cleanup:", e));
+      }
+    };
+  }, [isAuthReady, db, userId]);
+
+  // Mengambil pesan untuk sesi saat ini
+  useEffect(() => {
+    if (!db || !currentSessionId) {
+      setMessages([]);
+      return;
+    }
+
+    const messagesCollectionPath = `artifacts/${appId}/public/data/sessions/${currentSessionId}/messages`;
+    const messagesRef = collection(db, messagesCollectionPath);
+    const q = query(messagesRef, orderBy("timestamp"));
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const msgs = [];
+      snapshot.forEach(doc => {
+        msgs.push({ id: doc.id, ...doc.data() });
+      });
+      setMessages(msgs);
+    }, (error) => {
+      console.error("KESALAHAN SAAT MENDENGARKAN PESAN:", error);
+      setStatusMessage("Kesalahan saat memuat pesan. (Lihat konsol)");
+    });
+
+    return () => unsubscribe();
+  }, [db, currentSessionId]);
+
+  // Menggulir ke bawah saat pesan baru tiba
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
+
+  // Mengirim pesan baru
+  const handleSendMessage = async (e) => {
+    e.preventDefault();
+    if (newMessage.trim() === '' || !db || !currentSessionId || !userId || !partnerId) {
+      return;
+    }
+
+    try {
+      const messagesCollectionPath = `artifacts/${appId}/public/data/sessions/${currentSessionId}/messages`;
+      const messagesCollectionRef = collection(db, messagesCollectionPath);
+      await addDoc(messagesCollectionRef, {
+        senderId: userId,
+        text: newMessage,
+        timestamp: serverTimestamp(),
+      });
+      setNewMessage('');
+      const sessionDocRef = doc(db, `artifacts/${appId}/public/data/sessions/${currentSessionId}`);
+      await updateDoc(sessionDocRef, {
+        lastMessageAt: serverTimestamp()
+      });
+    } catch (error) {
+      console.error("KESALAHAN SAAT MENGIRIM PESAN:", error);
+      setStatusMessage("Kesalahan saat mengirim pesan. (Lihat konsol)");
+    }
+  };
+
+  // Fungsi untuk merangkum chat menggunakan Gemini API
+  const handleSummarizeChat = async () => {
+    if (messages.length === 0) {
+      setSummary("Tidak ada pesan untuk diringkas.");
+      setShowSummaryModal(true);
+      return;
+    }
+    if (isSummarizing) return;
+
+    setIsSummarizing(true);
+    setSummary(''); // Bersihkan ringkasan sebelumnya
+    setShowSummaryModal(true); // Tampilkan modal dengan status loading
+
+    try {
+      const chatHistory = [];
+      // Batasi jumlah pesan untuk ringkasan agar tidak terlalu besar
+      const messagesToSummarize = messages.slice(-20); // Ambil 20 pesan terakhir
+
+      messagesToSummarize.forEach(msg => {
+        const sender = msg.senderId === userId ? "Saya" : "Mitra";
+        chatHistory.push({ role: "user", parts: [{ text: `${sender}: ${msg.text}` }] });
+      });
+
+      // Tambahkan instruksi untuk merangkum
+      chatHistory.push({ role: "user", parts: [{ text: "Harap ringkas percakapan di atas. Fokus pada poin-poin utama tanpa menyebutkan nama pengguna." }] });
+
+      const payload = { contents: chatHistory };
+      const apiKey = ""; // API key akan disediakan secara otomatis oleh lingkungan Canvas
+      const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
+
+      const response = await fetch(apiUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      const result = await response.json();
+
+      if (result.candidates && result.candidates.length > 0 &&
+          result.candidates[0].content && result.candidates[0].content.parts &&
+          result.candidates[0].content.parts.length > 0) {
+        const text = result.candidates[0].content.parts[0].text;
+        setSummary(text);
+      } else {
+        setSummary("Tidak dapat membuat ringkasan. Silakan coba lagi.");
+        console.error("Struktur respons Gemini API tidak terduga atau konten hilang:", result);
+      }
+    } catch (error) {
+      console.error("Kesalahan saat memanggil Gemini API:", error);
+      setSummary("Terjadi kesalahan saat merangkum. Silakan coba lagi.");
+    } finally {
+      setIsSummarizing(false);
+    }
+  };
+
+
+  const handleNewChat = async () => {
+    if (!db || !userId) return;
+
+    if (currentSessionId) {
+      const sessionRef = doc(db, `artifacts/${appId}/public/data/sessions/${currentSessionId}`);
+      try {
+        const docSnap = await getDoc(sessionRef);
+        if (docSnap.exists()) {
+          const data = docSnap.data();
+          if (data.status === 'active' && (data.user1Id === userId || data.user2Id === userId)) {
+            await updateDoc(sessionRef, { status: 'ended' }).catch(e => console.error("Gagal mengakhiri sesi sebelumnya:", e));
+          }
+        }
+      } catch (error) {
+        console.error("Gagal mengambil dokumen sesi saat memulai chat baru:", error);
+      }
+    }
+
+    setCurrentSessionId(null);
+    setPartnerId(null);
+    setMessages([]);
+    setNewMessage('');
+    setSummary(''); // Bersihkan ringkasan saat chat baru
+    setShowSummaryModal(false); // Sembunyikan modal ringkasan
+    setStatusMessage("Mulai chat baru. Mencari mitra...");
+    setIsAuthReady(false);
+    setTimeout(() => setIsAuthReady(true), 10);
+  };
+
+
+  return (
+    <div className="flex flex-col h-screen bg-gradient-to-br from-indigo-500 to-purple-600 font-inter antialiased overflow-hidden">
+      <header className="bg-white bg-opacity-90 backdrop-blur-sm text-gray-800 p-4 shadow-lg rounded-b-xl md:rounded-b-3xl mx-auto w-full max-w-2xl mt-4">
+        <h1 className="text-3xl sm:text-4xl font-extrabold text-center text-purple-700 tracking-tight">Chat Anonim</h1>
+        <p className="text-center text-sm sm:text-base mt-2 font-medium">ID Anda: <span className="font-semibold text-indigo-600">{userId || 'Memuat...'}</span></p>
+      </header>
+
+      <main className="flex-1 flex flex-col p-4 md:p-6 overflow-hidden max-w-2xl mx-auto w-full">
+        <div className="bg-white bg-opacity-95 rounded-2xl shadow-xl p-4 flex-1 flex flex-col mb-4 overflow-hidden border-2 border-purple-200">
+          <p className="text-center text-sm font-medium px-2 py-2 bg-purple-50 text-purple-700 rounded-lg mb-4 shadow-sm">
+            {statusMessage}
+            {partnerId && ` Mitra Anda: ${partnerId}`}
+            {!partnerId && currentSessionId && statusMessage.includes("Menunggu") && <span className="ml-2 animate-pulse">...</span>}
+          </p>
+
+          <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar space-y-3 pb-2">
+            {messages.length === 0 && partnerId && (
+              <div className="text-center text-gray-500 mt-10 text-lg">
+                Belum ada pesan. Mari mulai percakapan Anda! 👋
+              </div>
+            )}
+            {messages.map((msg) => (
+              <div
+                key={msg.id}
+                className={`flex ${msg.senderId === userId ? 'justify-end' : 'justify-start'}`}
+              >
+                <div
+                  className={`max-w-[80%] md:max-w-[70%] px-4 py-2 rounded-2xl shadow-md transform transition duration-200 ease-in-out hover:scale-[1.01] ${
+                    msg.senderId === userId
+                      ? 'bg-purple-600 text-white rounded-br-none ml-auto'
+                      : 'bg-gray-200 text-gray-800 rounded-bl-none mr-auto'
+                  }`}
+                >
+                  <p className="text-sm sm:text-base leading-snug">{msg.text}</p>
+                  <span className="text-xs opacity-80 mt-1 block text-right">
+                    {msg.timestamp?.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) || 'Mengirim...'}
+                  </span>
+                </div>
+              </div>
+            ))}
+            <div ref={messagesEndRef} />
+          </div>
+        </div>
+
+        <form onSubmit={handleSendMessage} className="flex items-center space-x-3 bg-white bg-opacity-95 p-3 rounded-2xl shadow-xl border border-purple-200">
+          <input
+            type="text"
+            value={newMessage}
+            onChange={(e) => setNewMessage(e.target.value)}
+            placeholder={partnerId ? "Ketik pesan Anda di sini..." : "Menunggu mitra..."}
+            className="flex-1 p-3 border border-gray-300 rounded-full focus:outline-none focus:ring-3 focus:ring-purple-400 focus:border-transparent transition duration-200 disabled:bg-gray-100 disabled:placeholder-gray-400"
+            disabled={!partnerId}
+          />
+          <button
+            type="submit"
+            className="bg-gradient-to-r from-purple-600 to-indigo-700 hover:from-purple-700 hover:to-indigo-800 text-white font-bold py-3 px-6 rounded-full shadow-lg transition duration-300 ease-in-out transform hover:-translate-y-1 hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed disabled:from-gray-400 disabled:to-gray-500"
+            disabled={!partnerId || newMessage.trim() === ''}
+          >
+            Kirim
+          </button>
+        </form>
+
+        <div className="mt-4 flex flex-col sm:flex-row justify-center space-y-3 sm:space-y-0 sm:space-x-4">
+            <button
+                onClick={handleNewChat}
+                className="bg-gradient-to-r from-green-500 to-teal-600 hover:from-green-600 hover:to-teal-700 text-white font-bold py-3 px-6 rounded-full shadow-lg transition duration-300 ease-in-out transform hover:-translate-y-1 hover:scale-105"
+            >
+                Mulai Chat Baru
+            </button>
+            <button
+                onClick={handleSummarizeChat}
+                className="bg-gradient-to-r from-blue-500 to-cyan-600 hover:from-blue-600 hover:to-cyan-700 text-white font-bold py-3 px-6 rounded-full shadow-lg transition duration-300 ease-in-out transform hover:-translate-y-1 hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed disabled:from-gray-400 disabled:to-gray-500"
+                disabled={!partnerId || messages.length === 0 || isSummarizing}
+            >
+                {isSummarizing ? '✨ Merangkum...' : '✨ Ringkas Percakapan'}
+            </button>
+        </div>
+      </main>
+
+      {/* Modal Ringkasan */}
+      {showSummaryModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center p-4 z-50 animate-fade-in">
+          <div className="bg-white rounded-3xl shadow-2xl p-6 md:p-8 w-full max-w-md mx-auto relative transform scale-95 animate-scale-in border-4 border-purple-400">
+            <h2 className="text-2xl font-extrabold mb-4 text-purple-800 text-center">Ringkasan Percakapan 📝</h2>
+            {isSummarizing ? (
+              <p className="text-gray-700 text-lg text-center animate-pulse">Membuat ringkasan, harap tunggu...</p>
+            ) : (
+              <p className="text-gray-800 whitespace-pre-wrap leading-relaxed text-base">{summary}</p>
+            )}
+            <button
+              onClick={() => setShowSummaryModal(false)}
+              className="mt-6 w-full bg-gradient-to-r from-purple-600 to-indigo-700 hover:from-purple-700 hover:to-indigo-800 text-white font-bold py-3 px-6 rounded-full shadow-lg transition duration-300 ease-in-out transform hover:-translate-y-1 hover:scale-105"
+            >
+              Tutup
+            </button>
+          </div>
+        </div>
+      )}
+
+      <style>{`
+        /* Scrollbar kustom untuk Chrome, Safari, Opera */
+        .custom-scrollbar::-webkit-scrollbar {
+          width: 8px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+          background: #e0e0e0; /* Warna track yang lebih lembut */
+          border-radius: 10px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+          background: #a0a0a0; /* Warna thumb yang lebih lembut */
+          border-radius: 10px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+          background: #707070;
+        }
+
+        /* Scrollbar kustom untuk Firefox */
+        .custom-scrollbar {
+          scrollbar-width: thin;
+          scrollbar-color: #a0a0a0 #e0e0e0;
+        }
+
+        /* Animasi Kustom untuk Modal */
+        @keyframes fadeIn {
+          from { opacity: 0; }
+          to { opacity: 1; }
+        }
+        @keyframes scaleIn {
+          from { transform: scale(0.9); opacity: 0; }
+          to { transform: scale(1); opacity: 1; }
+        }
+        .animate-fade-in {
+          animation: fadeIn 0.3s ease-out forwards;
+        }
+        .animate-scale-in {
+          animation: scaleIn 0.3s ease-out forwards;
+        }
+      `}</style>
+    </div>
+  );
+}
+
+export default App;
